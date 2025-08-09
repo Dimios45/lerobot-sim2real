@@ -50,6 +50,20 @@ Note that depending on what hardware you are using you might need to install add
 
 ## Sim2Real Tutorial
 
-We currently provide a tutorial on how to train a RGB based model controlling an SO100 robot arm in simulation and deploying that zero-shot in the real world to grasp cubes. Follow the tutorial [here](./docs/zero_shot_rgb_sim2real.md). Note while SO101 looks similar to SO100, we have found that there are some key differences that make sim2real fail for SO101, we will updaye this repository once SO101 is modelled correctly.
+We currently provide a tutorial on how to train a RGB based model controlling an SO100 robot arm in simulation and deploying that zero-shot in the real world to grasp cubes. Follow the tutorial [here](./docs/zero_shot_rgb_sim2real.md). Note while SO101 looks similar to SO100, we have found that there are some key differences that make sim2real fail for SO101, we will update this repository once SO101 is modelled correctly.
 
 We are also working on a tutorial showing you how to make your own environments ready for sim2real, stay tuned!
+
+## Training Algorithms
+
+This repository supports training with both PPO and FPO (Flow Policy Optimization) algorithms:
+
+- **PPO**: Proximal Policy Optimization, a standard RL algorithm
+- **FPO**: Flow Policy Optimization, a new algorithm that uses flow matching for policy optimization
+
+To train with FPO, use the FPO training script:
+```bash
+python lerobot_sim2real/scripts/train_fpo_rgb.py --env_id PickCube-v1
+```
+
+For more information about FPO, refer to the paper: https://arxiv.org/pdf/2507.21053

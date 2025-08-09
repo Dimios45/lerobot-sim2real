@@ -1,10 +1,27 @@
 """Flow Policy Optimization (FPO) for visual RL in ManiSkill.
 
-Implements a flow-based policy with a lightweight conditional flow matching (CFM) objective
-and PPO-style clipped surrogate using the FPO ratio.
+Implements the Flow Policy Optimization algorithm as described in the paper:
+https://arxiv.org/pdf/2507.21053
+
+Algorithm 1 Flow Policy Optimization (FPO)
+Require: Policy parameters θ, value function parameters ϕ, clip parameter ϵ, MC samples Nmc
+1: while not converged do
+2: Collect trajectories using any flow model sampler and compute advantages ˆAt
+3: For each action, store Nmc timestep-noise pairs {(τi, ϵi)} and compute ℓθ (τi, ϵi)
+4: θold ← θ
+5: for each optimization epoch do
+6: Sample mini-batch from collected trajectories
+7: for each state-action pair (ot, at) and corresponding MC samples {(τi, ϵi)} do
+8: Compute ℓθ (τi, ϵi) using stored (τi, ϵi)
+9: ˆrθ ← exp(- 1/Nmc * Σ(ℓθ (τi, ϵi) − ℓθold (τi, ϵi)))
+10: LFPO(θ) ← min(ˆrθ ˆAt, clip(ˆrθ , 1 ± ϵ) ˆAt)
+11: end for
+12: θ ← Optimizer(θ, ∇θ Σ LFPO(θ))
+13: end for
+14: Update value function parameters ϕ like standard PPO
+15: end while
 
 Notes
-- Ratio r_hat = exp( L_CFM(old) - L_CFM(cur) ) estimated with N_mc samples of (tau, eps)
 - Action sampling via integrating the learned velocity field from tau=1 to tau=0 (Euler steps)
 - Critic/value trained exactly like PPO for GAE advantage estimation
 
@@ -88,7 +105,7 @@ class FPOArgs:
     gae_lambda: float = 0.9
 
     # FPO-specific
-    n_mc: int = 1           # number of (tau, eps) per transition for ratio
+    n_mc: int = 16          # number of (tau, eps) per transition for ratio (Nmc in paper)
     sampler_steps: int = 8  # Euler steps for flow sampler from tau=1->0
 
     # to be filled in runtime
@@ -241,17 +258,7 @@ class FlowPolicy(nn.Module):
         return self.critic(feats)
 
     # ---- CFM Loss terms for FPO ratio ----
-    @torch.no_grad()
-    def cfm_loss_per_sample_old(self, obs: dict, action: torch.Tensor, taus: torch.Tensor, eps: torch.Tensor) -> torch.Tensor:
-        """Compute per-sample CFM loss with current parameters but detached graph (for theta_old snapshot).
-        Return shape: (batch, n_mc)
-        """
-        return self._cfm_loss_per_sample(obs, action, taus, eps, no_grad=True)
-
     def cfm_loss_per_sample(self, obs: dict, action: torch.Tensor, taus: torch.Tensor, eps: torch.Tensor) -> torch.Tensor:
-        return self._cfm_loss_per_sample(obs, action, taus, eps, no_grad=False)
-
-    def _cfm_loss_per_sample(self, obs: dict, action: torch.Tensor, taus: torch.Tensor, eps: torch.Tensor, no_grad: bool) -> torch.Tensor:
         """Implements Eq (8): || v_hat(a_tau, tau; o) - (a - eps) ||^2
         - a_tau = alpha(tau) * a + sigma(tau) * eps
         obs: dict with batch dimension B
@@ -532,7 +539,13 @@ def train(args: FPOArgs):
                 torch.save(agent.state_dict(), model_path)
                 print(f"model saved to {model_path}")
 
-        # Rollout
+        # Algorithm line 4: θold ← θ
+        # Create a copy of the agent for computing old CFM losses
+        agent_old = FlowPolicy(envs, sample_obs=next_obs, sampler_steps=args.sampler_steps).to(device)
+        agent_old.load_state_dict(agent.state_dict())
+        agent_old.eval()
+        
+        # Rollout (Algorithm line 2: Collect trajectories using any flow model sampler and compute advantages ˆAt)
         agent.train()
         for step in range(args.num_steps):
             global_step += args.num_envs
@@ -544,11 +557,12 @@ def train(args: FPOArgs):
             actions[step] = act
             values[step] = val
 
-            # Sample MC pairs and precompute old CFM losses using a frozen copy
+            # Algorithm line 3: For each action, store Nmc timestep-noise pairs {(τi, ϵi)} and compute ℓθ (τi, ϵi)
             with torch.no_grad():
                 taus = torch.rand((args.num_envs, args.n_mc), device=device)
                 eps = torch.randn((args.num_envs, args.n_mc, actions.shape[-1]), device=device)
-                cfm_old = agent.cfm_loss_per_sample_old(next_obs, act, taus, eps)
+                # Compute old CFM losses using the frozen copy
+                cfm_old = agent_old.cfm_loss_per_sample(next_obs, act, taus, eps)
                 taus_buf[step] = taus
                 eps_buf[step] = eps
                 cfm_old_buf[step] = cfm_old
@@ -557,7 +571,7 @@ def train(args: FPOArgs):
             next_done = torch.logical_or(terminations, truncations).to(torch.float32)
             rewards[step] = reward.view(-1) * args.reward_scale
 
-        # Compute GAE advantages and returns
+        # Compute GAE advantages and returns (part of Algorithm line 2)
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
             advantages = torch.zeros_like(rewards, device=device)
@@ -585,7 +599,7 @@ def train(args: FPOArgs):
         b_eps = eps_buf.reshape((-1, args.n_mc, envs.single_action_space.shape[0]))
         b_cfm_old = cfm_old_buf.reshape((-1, args.n_mc))
 
-        # Policy/value update
+        # Policy/value update (Algorithm lines 5-14)
         b_inds = np.arange(args.batch_size)
         for epoch in range(args.update_epochs):
             np.random.shuffle(b_inds)
@@ -593,20 +607,24 @@ def train(args: FPOArgs):
                 end = start + args.minibatch_size
                 mb_inds = b_inds[start:end]
 
-                # Compute current CFM losses and the FPO ratio
+                # Algorithm line 7: for each state-action pair (ot, at) and corresponding MC samples {(τi, ϵi)} do
+                # Algorithm line 8: Compute ℓθ (τi, ϵi) using stored (τi, ϵi)
                 cfm_cur = agent.cfm_loss_per_sample(b_obs[mb_inds], b_actions[mb_inds], b_taus[mb_inds], b_eps[mb_inds])
-                # L_CFM = mean over n_mc
-                L_old = torch.mean(b_cfm_old[mb_inds], dim=-1)
-                L_cur = torch.mean(cfm_cur, dim=-1)
-                ratio = torch.exp(L_old - L_cur)  # shape (mb,)
-
+                
+                # Algorithm line 9: ˆrθ ← exp(- 1/Nmc * Σ(ℓθ (τi, ϵi) − ℓθold (τi, ϵi)))
+                # Compute the mean difference over MC samples
+                diff = cfm_cur - b_cfm_old[mb_inds]  # (batch_size, n_mc)
+                mean_diff = torch.mean(diff, dim=-1)  # (batch_size,)
+                ratio = torch.exp(-mean_diff)  # ˆrθ (batch_size,)
+                
                 mb_adv = b_advantages[mb_inds]
-                # Clipped surrogate
+                
+                # Algorithm line 10: LFPO(θ) ← min(ˆrθ ˆAt, clip(ˆrθ , 1 ± ϵ) ˆAt)
                 unclipped = ratio * mb_adv
                 clipped = torch.clamp(ratio, 1.0 - args.clip_coef, 1.0 + args.clip_coef) * mb_adv
                 policy_loss = -torch.mean(torch.minimum(unclipped, clipped))
 
-                # Value loss
+                # Algorithm line 14: Update value function parameters ϕ like standard PPO
                 new_values = agent.get_value(b_obs[mb_inds]).view(-1)
                 v_loss = 0.5 * torch.mean((new_values - b_returns[mb_inds]) ** 2)
 
