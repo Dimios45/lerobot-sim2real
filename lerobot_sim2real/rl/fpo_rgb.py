@@ -259,7 +259,8 @@ class FlowPolicy(nn.Module):
 
     # ---- CFM Loss terms for FPO ratio ----
     def cfm_loss_per_sample(self, obs: dict, action: torch.Tensor, taus: torch.Tensor, eps: torch.Tensor) -> torch.Tensor:
-        """Implements Eq (8): || v_hat(a_tau, tau; o) - (a - eps) ||^2
+        """Implements weighted denoising loss with proper weighting factors for FPO ratio.
+        Based on Eq (14): 1/2 * w(λτ) * (-dλ/dτ) * || v_hat(a_tau, tau; o) - (a - eps) ||^2
         - a_tau = alpha(tau) * a + sigma(tau) * eps
         obs: dict with batch dimension B
         action: (B, A)
@@ -286,8 +287,18 @@ class FlowPolicy(nn.Module):
 
         v_hat = self._velocity(features_exp, a_tau_flat, tau_batch)  # (B*n_mc, A)
         target = (action_exp - eps).reshape(B * n_mc, A)
-        loss = torch.sum((v_hat - target) ** 2, dim=-1)  # (B*n_mc)
-        return loss.view(B, n_mc)
+        
+        # Compute squared error
+        squared_error = torch.sum((v_hat - target) ** 2, dim=-1)  # (B*n_mc)
+        
+        # Add weighting factors for diffusion schedule (w(λτ) = 1, -dλ/dτ = 1 for simple VP)
+        # For simple VP schedule: λ = log(alpha^2 / sigma^2) = log((1-tau)/tau)
+        # dλ/dτ = -1/(tau*(1-tau)) => -dλ/dτ = 1/(tau*(1-tau))
+        tau_safe = torch.clamp(tau_batch, 1e-6, 1.0 - 1e-6)  # avoid division by zero
+        weight_factor = 1.0 / (tau_safe * (1.0 - tau_safe))  # -dλ/dτ
+        weighted_loss = 0.5 * weight_factor * squared_error  # 1/2 * w(λτ) * (-dλ/dτ) * ||error||^2
+        
+        return weighted_loss.view(B, n_mc)
 
 
 # --------- Logger ---------
@@ -611,8 +622,9 @@ def train(args: FPOArgs):
                 # Algorithm line 8: Compute ℓθ (τi, ϵi) using stored (τi, ϵi)
                 cfm_cur = agent.cfm_loss_per_sample(b_obs[mb_inds], b_actions[mb_inds], b_taus[mb_inds], b_eps[mb_inds])
                 
-                # Algorithm line 9: ˆrθ ← exp(- 1/Nmc * Σ(ℓθ (τi, ϵi) − ℓθold (τi, ϵi)))
-                # Compute the mean difference over MC samples
+                # Compute ratio based on theoretical derivation (Eq. 16)
+                # rFPO_θ = exp(Lw_θold(at) - Lw_θ(at))
+                # Compute the mean difference over MC samples (current - old)
                 diff = cfm_cur - b_cfm_old[mb_inds]  # (batch_size, n_mc)
                 mean_diff = torch.mean(diff, dim=-1)  # (batch_size,)
                 ratio = torch.exp(-mean_diff)  # ˆrθ (batch_size,)
