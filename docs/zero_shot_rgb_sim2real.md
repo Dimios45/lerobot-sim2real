@@ -102,9 +102,11 @@ This will then produce something like below. Again it is not perfect alignment b
 
 ## 2: Visual Reinforcement Learning in Simulation
 
-Now we get to train the robot we setup in the real world in simulation via RL. We provide a baseline training script for visual Proximal Policy Optimization (PPO), which accepts environment id and the env configuration json file so that we can train on an environment aligned with the real world. If you haven't already make sure to add the path to the greenscreen image in your env_config.json file.
+Now we get to train the robot we setup in the real world in simulation via RL. We provide baseline training scripts for both visual Proximal Policy Optimization (PPO) and Flow Policy Optimization (FPO), which accept environment id and the env configuration json file so that we can train on an environment aligned with the real world. If you haven't already make sure to add the path to the greenscreen image in your env_config.json file.
 
 For the SO100GraspCube-v1 environment we have the following already tuned script (uses about 8-10GB of GPU memory)
+
+### PPO Training
 
 ```bash
 seed=3
@@ -117,13 +119,27 @@ python lerobot_sim2real/scripts/train_ppo_rgb.py --env-id="SO100GraspCube-v1" --
   --ppo.track --ppo.wandb_project_name "SO100-ManiSkill"
 ```
 
-This will train an agent via RL/PPO and track its training progress on Weights and Biases and Tensorboard. Run `tensorboard --logdir runs/` to see the local tracking. Checkpoints are saved to `runs/ppo-SO100GraspCube-v1-rgb-${seed}/ckpt_x.pt` and evaluation videos in simulation are saved to `runs/ppo-SO100GraspCube-v1-rgb-${seed}/videos`. If you have more GPU memory available you can train faster by bumping the `--ppo.num_envs` argument up to 2048.
+### FPO Training
+
+```bash
+seed=3
+python lerobot_sim2real/scripts/train_fpo_rgb.py --env-id="SO100GraspCube-v1" --env-kwargs-json-path=env_config.json \
+  --fpo.seed=${seed} \
+  --fpo.num_envs=1024 --fpo.num-steps=16 --fpo.update_epochs=8 --fpo.num_minibatches=32 \
+  --fpo.total_timesteps=100_000_000 --fpo.gamma=0.9 \
+  --fpo.num_eval_envs=16 --fpo.num-eval-steps=64 --fpo.no-partial-reset \
+  --fpo.exp-name="fpo-SO100GraspCube-v1-rgb-${seed}" \
+  --fpo.track --fpo.wandb_project_name "SO100-ManiSkill" \
+  --fpo.wandb_group "FPO"
+```
+
+These will train agents via RL and track their training progress on Weights and Biases and Tensorboard. Run `tensorboard --logdir runs/` to see the local tracking. Checkpoints are saved to `runs/{algorithm}-SO100GraspCube-v1-rgb-${seed}/ckpt_x.pt` and evaluation videos in simulation are saved to `runs/{algorithm}-SO100GraspCube-v1-rgb-${seed}/videos`. If you have more GPU memory available you can train faster by bumping the `--{algorithm}.num_envs` argument up to 2048.
 
 While training you can check out the eval videos which by default look like the following 4x4 grid showing 16 parallel environments:
 
 ![](./assets/eval_image_annotated.png)
 
-Highlighted in red is just an enlarged image showing what the sim looks like. It is not what is fed to the policy during training or evaluation. Highlighted in blue is the actual 128x128 image given to the policy (you can ignore the colored segementation map), which shows the greenscreen in effect and possible other randomizations. If you don't want your eval videos to show the enlarged image and just show the actual image inputs, you can add `--ppo.render-mode="sensors"` and we will only save videos of the image inputs.
+Highlighted in red is just an enlarged image showing what the sim looks like. It is not what is fed to the policy during training or evaluation. Highlighted in blue is the actual 128x128 image given to the policy (you can ignore the colored segementation map), which shows the greenscreen in effect and possible other randomizations. If you don't want your eval videos to show the enlarged image and just show the actual image inputs, you can add `--{algorithm}.render-mode="sensors"` and we will only save videos of the image inputs.
 
 Moreover, for this environment the evaluation result curves may look approximately like this during training.
 
@@ -136,10 +152,21 @@ For the SO100GraspCube-v1 task you don't need 100_000_000 timesteps of training 
 
 Now you have a checkpoint you have trained and want to evaluate, place a cube onto the table in front of the robot. We recommend using cubes around 2.5cm in size since that is the average size the robot is trained to pick up in simulation. Furthermore we strongly recommend to be wary that you place the cube in a location that the robot was trained to pick from, which is dependent on your cube spawning randomization settings (if you aren't sure check the reset distribution video you generated in step 1).
 
+### PPO Evaluation
+
 Then you run your model on the real robot with the following. Note that each time the real environment needs to be reset you will be prompted in the terminal to do so and to press enter to start the next evaluation episode.
 
 ```bash
 python lerobot_sim2real/scripts/eval_ppo_rgb.py --env_id="SO100GraspCube-v1" --env-kwargs-json-path=env_config.json \
+    --checkpoint=path/to/ckpt.pt --no-continuous-eval --control-freq=15
+```
+
+### FPO Evaluation
+
+For FPO evaluation, use the following command:
+
+```bash
+python lerobot_sim2real/scripts/eval_fpo_rgb.py --env_id="SO100GraspCube-v1" --env-kwargs-json-path=env_config.json \
     --checkpoint=path/to/ckpt.pt --no-continuous-eval --control-freq=15
 ```
 
