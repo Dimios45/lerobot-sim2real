@@ -1,5 +1,5 @@
 #!/bin/bash
-seed=3
+seed=1
 python lerobot_sim2real/scripts/train_fpo_rgb.py --env-id="SO100GraspCube-v1" --env-kwargs-json-path=env_config.json \
   --fpo.seed=${seed} \
   --fpo.num_envs=1024 --fpo.num-steps=16 --fpo.update_epochs=8 --fpo.num_minibatches=32 \
