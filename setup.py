@@ -12,5 +12,6 @@ setup(
         "mani_skill_nightly",
         "tensorboard",
         "wandb"
+        "depthai"
     ]
 )

@@ -4,7 +4,13 @@ from lerobot.common.robots.robot import Robot
 from lerobot.common.robots.so100_follower.config_so100_follower import SO100FollowerConfig
 from lerobot.common.robots.utils import make_robot_from_config
 import numpy as np
-from lerobot.common.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+
+#from lerobot.common.cameras.realsense.configuration_realsense import RealSenseCameraConfig
+
+#we are working with depthai oakdpro camera and have a  lerobot pr pending  
+from lerobot.common.cameras.depthai.configuration_depthai import DepthAICameraConfig
+
+
 
 def create_real_robot(uid: str = "so100") -> Robot:
     """Wrapper function to map string UIDS to real robot configurations. Primarily for saving a bit of code for users when they fork the repository. They can just edit the camera, id etc. settings in this one file."""
@@ -18,9 +24,13 @@ def create_real_robot(uid: str = "so100") -> Robot:
             # }
             # for intel realsense camera users you need to modify the serial number or name for your own hardware
             cameras={
-                "base_camera": RealSenseCameraConfig(serial_number_or_name="146322070293", fps=30, width=640, height=480)
+                #"base_camera": RealSenseCameraConfig(serial_number_or_name="146322070293", fps=30, width=640, height=480)
+            # for depthai oakdpro camera users you need to modify the mxid or name for your own hardware    
+                "base_camera": DepthAICameraConfig(mxid_or_name="1844301081BD341300", fps=30, width=640, height=480)
             },
             id="stone_home",
         )
         real_robot = make_robot_from_config(robot_config)
         return real_robot
+    
+    
