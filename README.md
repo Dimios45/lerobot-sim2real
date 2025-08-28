@@ -53,3 +53,8 @@ Note that depending on what hardware you are using you might need to install add
 We currently provide a tutorial on how to train a RGB based model controlling an SO100 robot arm in simulation and deploying that zero-shot in the real world to grasp cubes. Follow the tutorial [here](./docs/zero_shot_rgb_sim2real.md). Note while SO101 looks similar to SO100, we have found that there are some key differences that make sim2real fail for SO101, we will updaye this repository once SO101 is modelled correctly.
 
 We are also working on a tutorial showing you how to make your own environments ready for sim2real, stay tuned!
+
+## FPO(Flow Policy Optimization)
+The instructions to train fpo in simulation and deploy it to hardware are given [here](./docs/fpo_sim2real.md).
+
+
